@@ -1,0 +1,8 @@
+<resources>
+    <string name="app_name">FlickrStroll</string>
+    <string name="start">Start</string>
+    <string name="stop">Stop</string>
+    <string name="notification_channel_name">Location updates</string>
+    <string name="notification_content_title">Walk started</string>
+    <string name="notification_content_text">Collecting photos for your walk</string>
+</resources>
