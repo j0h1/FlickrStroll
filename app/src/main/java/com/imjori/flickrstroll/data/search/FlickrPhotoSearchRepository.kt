@@ -2,9 +2,7 @@ package com.imjori.flickrstroll.data.search
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.withContext
 import okio.IOException
 import javax.inject.Inject
 
@@ -12,25 +10,25 @@ class FlickrPhotoSearchRepository @Inject constructor(
     private val flickrPhotoSearchApi: FlickrPhotoSearchApi
 ) {
 
-    fun getNearbyPhotos(lat: Double, lon: Double): Flow<FlickrSearchResult> {
-        return flow {
+    suspend fun getNearbyPhotos(lat: Double, lon: Double, radius: Double): FlickrSearchResult =
+        withContext(Dispatchers.IO) {
+            Log.d(TAG, "Get nearby photos for: lat=$lat, lon=$lon, radius=$radius")
             try {
                 val photosForCurrentLocation =
-                    flickrPhotoSearchApi.getImagesNearCurrentLocation(lat, lon)
+                    flickrPhotoSearchApi.getImagesNearCurrentLocation(lat, lon, radius)
                         .photos
                         .photo
 
                 if (photosForCurrentLocation.isEmpty()) {
-                    emit(FlickrSearchResult.NoPhotoFound)
+                    return@withContext FlickrSearchResult.NoPhotosFound
                 } else {
-                    emit(FlickrSearchResult.PhotoFound(photosForCurrentLocation))
+                    return@withContext FlickrSearchResult.PhotosFound(photosForCurrentLocation)
                 }
             } catch (exception: IOException) {
-                Log.d(TAG, "Exception during photo fetching")
-                emit(FlickrSearchResult.NoPhotoFound)
+                Log.d(TAG, "Exception during photo fetching: $exception")
+                return@withContext FlickrSearchResult.Exception
             }
-        }.flowOn(Dispatchers.IO)
-    }
+        }
 
     companion object {
         private const val TAG = "FlickrPhotoSearchRepository"

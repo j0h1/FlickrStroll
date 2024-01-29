@@ -1,11 +1,17 @@
 package com.imjori.flickrstroll.presentation
 
 import android.Manifest
+import android.os.Build
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material.*
+import androidx.compose.material.Button
+import androidx.compose.material.ButtonDefaults
+import androidx.compose.material.Scaffold
+import androidx.compose.material.Text
+import androidx.compose.material.TopAppBar
+import androidx.compose.material.rememberScaffoldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
@@ -18,10 +24,13 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
+import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberMultiplePermissionsState
 import com.imjori.flickrstroll.R
-import com.imjori.flickrstroll.data.location.LocationPollingService
-import com.imjori.flickrstroll.presentation.util.Event
+import com.imjori.flickrstroll.data.location.NotificationService
+import com.imjori.flickrstroll.presentation.FlickrStrollViewModel.Event.RestartLocationPollingService
+import com.imjori.flickrstroll.presentation.FlickrStrollViewModel.Event.WalkStarted
+import com.imjori.flickrstroll.presentation.FlickrStrollViewModel.Event.WalkStopped
 import kotlinx.coroutines.flow.collectLatest
 
 @OptIn(ExperimentalPermissionsApi::class)
@@ -33,28 +42,35 @@ fun FlickrScrollScreen(
     val state = viewModel.viewState.value
     val scaffoldState = rememberScaffoldState()
 
-    val locationPermissionState = rememberMultiplePermissionsState(
+    val permissionState = rememberMultiplePermissionsState(
         permissions = listOf(
+            Manifest.permission.POST_NOTIFICATIONS,
             Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.ACCESS_FINE_LOCATION
+            Manifest.permission.ACCESS_FINE_LOCATION,
         )
-    ) { permissionStateMap ->
-        val allPermissionsGranted = !permissionStateMap.containsValue(false)
-        if (allPermissionsGranted) {
-            viewModel.toggleWalk()
+    ) { permissionsResult ->
+        val locationGranted = permissionsResult[Manifest.permission.ACCESS_COARSE_LOCATION] ?: false
+                && permissionsResult[Manifest.permission.ACCESS_FINE_LOCATION] ?: false
+        when {
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && permissionsResult.values.all { it })
+                    || (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && locationGranted) -> {
+                viewModel.toggleWalk()
+            }
         }
     }
+
 
     val context = LocalContext.current as MainActivity
 
     LaunchedEffect(true) {
         viewModel.event.collectLatest { event ->
             when (event) {
-                Event.WalkStarted, Event.RestartLocationPollingService -> {
-                    context.startForegroundService(LocationPollingService.getIntent(context))
+                WalkStarted, RestartLocationPollingService -> {
+                    context.startForegroundService(NotificationService.getIntent(context))
                 }
-                Event.WalkStopped -> {
-                    context.stopService(LocationPollingService.getIntent(context))
+
+                WalkStopped -> {
+                    context.stopService(NotificationService.getIntent(context))
                 }
             }
         }
@@ -71,10 +87,19 @@ fun FlickrScrollScreen(
                     Button(
                         colors = ButtonDefaults.outlinedButtonColors(),
                         onClick = {
-                            if (!locationPermissionState.allPermissionsGranted) {
-                                locationPermissionState.launchMultiplePermissionRequest()
-                            } else {
-                                viewModel.toggleWalk()
+                            val locationPermissionsGranted = permissionState.permissions.filter {
+                                it.permission in listOf(
+                                    Manifest.permission.ACCESS_COARSE_LOCATION,
+                                    Manifest.permission.ACCESS_FINE_LOCATION
+                                )
+                            }.all { it.status.isGranted }
+                            when {
+                                (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !permissionState.allPermissionsGranted)
+                                        || Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU && !locationPermissionsGranted -> {
+                                    permissionState.launchMultiplePermissionRequest()
+                                }
+
+                                else -> viewModel.toggleWalk()
                             }
                         }
                     ) {

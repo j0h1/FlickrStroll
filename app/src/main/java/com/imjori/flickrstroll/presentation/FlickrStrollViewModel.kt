@@ -1,32 +1,32 @@
 package com.imjori.flickrstroll.presentation
 
 import android.location.Location
+import android.os.Parcelable
 import android.util.Log
 import androidx.compose.runtime.State
 import androidx.compose.runtime.mutableStateOf
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.imjori.flickrstroll.data.location.TrackDistanceSinceLastPhotoRequest
-import com.imjori.flickrstroll.data.search.FlickrPhotoSearchRepository
+import com.imjori.flickrstroll.data.location.LocationRepository
 import com.imjori.flickrstroll.data.search.FlickrSearchPhotoMetadata
-import com.imjori.flickrstroll.data.search.FlickrSearchResult
 import com.imjori.flickrstroll.domain.model.Photo
-import com.imjori.flickrstroll.presentation.util.Event
-import com.imjori.flickrstroll.presentation.util.ViewState
+import com.imjori.flickrstroll.domain.usecase.GetPhotoForLocationUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.parcelize.Parcelize
 import javax.inject.Inject
 
 @HiltViewModel
 class FlickrStrollViewModel @Inject constructor(
-    private val flickrPhotoSearchRepository: FlickrPhotoSearchRepository,
     private val savedStateHandle: SavedStateHandle,
-    trackDistanceSinceLastPhotoRequest: TrackDistanceSinceLastPhotoRequest
+    private val locationRepository: LocationRepository,
+    private val getPhotoForLocation: GetPhotoForLocationUseCase,
 ) : ViewModel() {
 
     private val _viewState = mutableStateOf(savedStateHandle[VIEW_STATE_KEY] ?: ViewState())
@@ -35,11 +35,9 @@ class FlickrStrollViewModel @Inject constructor(
     private val _event = MutableSharedFlow<Event>()
     val event: SharedFlow<Event> = _event
 
-    init {
-        trackDistanceSinceLastPhotoRequest.requestPhoto.onEach { location ->
-            requestPhotoForLocation(location)
-        }.launchIn(viewModelScope)
+    private var getPhotosForLocationJob: Job? = null
 
+    init {
         viewModelScope.launch {
             if (viewState.value.isWalkStarted) {
                 _event.emit(Event.RestartLocationPollingService)
@@ -47,28 +45,10 @@ class FlickrStrollViewModel @Inject constructor(
         }
     }
 
-    private fun requestPhotoForLocation(location: Location) {
-        Log.d(TAG, "Requesting photo for current location")
-
-        flickrPhotoSearchRepository.getNearbyPhotos(
-            lat = location.latitude,
-            lon = location.longitude
-        )
-            .onEach { searchResult ->
-                when (searchResult) {
-                    is FlickrSearchResult.PhotoFound -> {
-                        handleNearbyPhotosFound(searchResult.photos)
-                    }
-                    FlickrSearchResult.NoPhotoFound -> {
-                        Log.d(TAG, "No photo found for current location")
-                    }
-                }
-            }
-            .launchIn(viewModelScope)
-    }
-
     fun toggleWalk() {
         val isWalkStartedToggled = !_viewState.value.isWalkStarted
+
+        initGetPhotosForLocationJob(shouldStart = isWalkStartedToggled)
 
         _viewState.value = _viewState.value.copy(
             isWalkStarted = isWalkStartedToggled,
@@ -84,19 +64,42 @@ class FlickrStrollViewModel @Inject constructor(
         savedStateHandle[VIEW_STATE_KEY] = _viewState.value
     }
 
-    private fun handleNearbyPhotosFound(photos: List<FlickrSearchPhotoMetadata>) {
-        val newPhotoMetadata = photos.firstOrNull { photoMetadata ->
-            !photoAlreadyInStream(photoMetadata)
+    private fun initGetPhotosForLocationJob(shouldStart: Boolean) {
+        getPhotosForLocationJob = if (shouldStart) {
+            locationRepository.locationFlow
+                .onEach { location ->
+                    handleNewLocation(location)
+                }.launchIn(viewModelScope)
+        } else {
+            getPhotosForLocationJob?.cancel()
+            null
         }
+    }
 
-        if (newPhotoMetadata == null) {
-            Log.d(TAG, "No new photo that is not already in stream")
-            return
+    private suspend fun handleNewLocation(location: Location) {
+        val getPhotoForLocationResult = getPhotoForLocation(
+            currentPhotos = _viewState.value.photos,
+            lat = location.latitude,
+            lon = location.longitude,
+        )
+
+        when (getPhotoForLocationResult) {
+            is GetPhotoForLocationUseCase.GetPhotoForLocationResult.PhotoFound -> {
+                handlePhotoFound(
+                    photoMetadata = getPhotoForLocationResult.photoMetadata,
+                )
+            }
+
+            GetPhotoForLocationUseCase.GetPhotoForLocationResult.NoPhotoFound -> {
+                Log.d(TAG, "No photo found for current location")
+            }
         }
+    }
 
+    private fun handlePhotoFound(photoMetadata: FlickrSearchPhotoMetadata) {
         val photo = Photo(
-            url = newPhotoMetadata.getUrl(),
-            contentDescription = newPhotoMetadata.title,
+            url = photoMetadata.getUrl(),
+            contentDescription = photoMetadata.title,
             index = _viewState.value.photos.size
         )
 
@@ -111,9 +114,16 @@ class FlickrStrollViewModel @Inject constructor(
         savedStateHandle[VIEW_STATE_KEY] = _viewState.value
     }
 
+    @Parcelize
+    data class ViewState(
+        val isWalkStarted: Boolean = false,
+        val photos: List<Photo> = emptyList()
+    ) : Parcelable
 
-    private fun photoAlreadyInStream(metadata: FlickrSearchPhotoMetadata): Boolean {
-        return _viewState.value.photos.map { it.url }.contains(metadata.getUrl())
+    sealed class Event {
+        data object WalkStarted : Event()
+        data object WalkStopped : Event()
+        data object RestartLocationPollingService : Event()
     }
 
     companion object {

@@ -1,43 +1,35 @@
 package com.imjori.flickrstroll.data.location
 
+import android.annotation.SuppressLint
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.NotificationManager.IMPORTANCE_HIGH
 import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.IBinder
+import android.os.PowerManager
 import androidx.core.app.NotificationCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleService
-import androidx.lifecycle.flowWithLifecycle
-import androidx.lifecycle.lifecycleScope
 import com.imjori.flickrstroll.R
 import com.imjori.flickrstroll.presentation.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.onEach
-import javax.inject.Inject
-
 
 @AndroidEntryPoint
-class LocationPollingService : LifecycleService() {
+class NotificationService : Service() {
 
-    @Inject
-    lateinit var locationRepository: LocationRepository
-
-    @Inject
-    lateinit var trackDistanceSinceLastPhotoRequest: TrackDistanceSinceLastPhotoRequest
-
-    private var locationFlow: Job? = null
-
-    private lateinit var notificationManager: NotificationManager
+    private lateinit var wakeLock: PowerManager.WakeLock
 
     override fun onCreate() {
         super.onCreate()
 
-        notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        wakeLock = (getSystemService(Context.POWER_SERVICE) as PowerManager).newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "FlickrScroll:NotificationServiceWakeLockTag"
+        )
+
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
         notificationManager.createNotificationChannel(
             NotificationChannel(
@@ -48,31 +40,22 @@ class LocationPollingService : LifecycleService() {
         )
     }
 
+    @SuppressLint("WakelockTimeout")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        subscribeToLocationUpdates()
+        wakeLock.acquire()
+        startForeground(NOTIFICATION_ID, getNotification())
 
         return super.onStartCommand(intent, flags, START_STICKY)
     }
 
     override fun onDestroy() {
-        unsubscribeFromLocationUpdates()
+        wakeLock.release()
+
         super.onDestroy()
     }
 
-    private fun subscribeToLocationUpdates() {
-        startForeground(NOTIFICATION_ID, getNotification())
-
-        locationFlow = locationRepository.locationFlow()
-            .flowWithLifecycle(lifecycle, Lifecycle.State.STARTED)
-            .onEach { currentLocation ->
-                trackDistanceSinceLastPhotoRequest(currentLocation)
-            }
-            .launchIn(lifecycleScope)
-    }
-
-    private fun unsubscribeFromLocationUpdates() {
-        trackDistanceSinceLastPhotoRequest.reset()
-        locationFlow?.cancel()
+    override fun onBind(intent: Intent?): IBinder? {
+        return null
     }
 
     private fun getNotification(): Notification {
@@ -103,6 +86,6 @@ class LocationPollingService : LifecycleService() {
         private const val MAIN_INTENT_REQUEST_CODE = 147
 
         fun getIntent(context: Context) =
-            Intent(context, LocationPollingService::class.java)
+            Intent(context, NotificationService::class.java)
     }
 }
